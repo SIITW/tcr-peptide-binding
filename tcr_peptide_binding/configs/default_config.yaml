@@ -1,0 +1,280 @@
+# =============================================================================
+# 模型配置
+# =============================================================================
+model:
+  name: "TCRPeptideBindingModel"
+  version: "1.0.0"
+  tokenizer_name: "Synthyra/ESMplusplus_large"
+
+# =============================================================================  
+# 编码器配置
+# =============================================================================
+tcr_encoder:
+  model_name: "Synthyra/ESMplusplus_large"
+  freeze_base_model: true
+  
+peptide_encoder:
+  model_name: "Synthyra/ESMplusplus_large" 
+  freeze_base_model: true
+
+# =============================================================================
+# PEFT (参数高效微调) 配置
+# =============================================================================
+peft:
+  enabled: true
+  method: "lora"  # 选项: lora, adalora, vera, boft, fourierft, oft, ia3, prefix
+  
+  # LoRA配置 
+  lora_r: 8                    # LoRA秩，控制可训练参数数量
+  lora_alpha: 16               # LoRA缩放参数，通常是r的2倍
+  lora_dropout: 0.05           # LoRA dropout率
+  target_modules:              # 目标模块，针对ESM++
+    - "attn.layernorm_qkv.1"
+    - "attn.out_proj"
+  bias: "none"                 # bias处理方式: none, all, lora_only
+  
+  # AdaLoRA配置 (自适应LoRA，如果想要更好效果)
+  init_r: 12                   # 初始秩
+  tinit: 0                     # 初始热身步数
+  tfinal: 200                  # 最终调整步数
+  deltaT: 10                   # 秩调整间隔
+  beta1: 0.85                  # 敏感度参数
+  beta2: 0.85                  # 不确定性参数
+  orth_reg_weight: 0.5         # 正交正则化权重
+  
+  # VeRA配置 (向量化随机矩阵，内存效率高)
+  vera_r: 256                  # VeRA秩
+  vera_dropout: 0.0            # VeRA dropout
+  d_initial: 0.1               # 初始lambda值
+  projection_prng_key: 0       # 随机投影种子
+  
+  # BOFT配置 (蝶式因子分解)
+  boft_block_size: 4           # 蝶式块大小
+  boft_block_num: 0            # 块数量 (0=自动)
+  boft_dropout: 0.0            # BOFT dropout
+  
+  # FourierFT配置 (频域微调)
+  n_frequency: 1000            # 频率数量
+  scaling: 300.0               # 缩放因子
+  
+  # OFT配置 (正交微调)
+  oft_r: 8                     # OFT秩
+  oft_dropout: 0.0             # OFT dropout
+  coft: false                  # 约束OFT
+  eps: 6e-5                    # 数值稳定性参数
+  block_share: false           # 块共享
+  
+  # Prefix Tuning配置
+  num_virtual_tokens: 20       # 虚拟token数量
+  prefix_projection: true      # 是否使用前缀投影
+  
+  # IA3配置 (参数最少)
+  feedforward_modules:         # 前馈模块
+    - "down_proj"
+
+# =============================================================================
+# Cross Attention融合配置
+# =============================================================================
+fusion:
+  type: "standard"             # 选项: standard, enhanced
+  num_heads: 8                 # 注意力头数
+  dropout: 0.1                 # Dropout率
+  strategy: "bidirectional"    # 策略: tcr_to_peptide, peptide_to_tcr, bidirectional
+  
+  # 增强版融合选项 (当type=enhanced时使用)
+  use_multi_scale: true        # 多尺度注意力
+  use_position_aware: true     # 位置感知注意力
+  use_contrastive: true        # 对比学习
+  use_gated_fusion: true       # 门控融合
+
+# =============================================================================
+# 分类器配置
+# =============================================================================
+classifier:
+  num_classes: 2               # 分类类别数 (0: 不结合, 1: 结合)
+  pooling_strategy: "cls"      # 池化策略: cls, mean, max, attention
+  fusion_method: "concat"      # 融合方法: concat, add, multiply, adaptive
+  dropout: 0.1                 # Dropout率
+
+# =============================================================================
+# 数据配置
+# =============================================================================
+data:
+  max_tcr_length: 128          # TCR序列最大长度
+  max_peptide_length: 64       # 肽序列最大长度
+  test_size: 0.2               # 测试集比例
+  val_size: 0.1                # 验证集比例
+  
+  # 数据预处理
+  preprocessing:
+    allow_extended_aa: false   # 是否允许扩展氨基酸
+    remove_invalid_chars: true # 移除无效字符
+    min_tcr_length: 10         # TCR最小长度
+    min_peptide_length: 6      # 肽最小长度
+
+# =============================================================================
+# 训练配置
+# =============================================================================
+training:
+  # 基础训练参数
+  epochs: 20                   # 训练轮数
+  batch_size: 4                # 批次大小 (根据GPU显存调整)
+  learning_rate: 2e-5          # 学习率
+  weight_decay: 0.01           # 权重衰减
+  warmup_ratio: 0.1            # 热身比例
+  
+  # 数据加载
+  num_workers: 2               # 数据加载工作进程数
+  pin_memory: true             # 是否使用pin_memory (GPU加速)
+  
+  # 优化器配置
+  optimizer: "adamw"           # 优化器类型
+  eps: 1e-8                    # Adam epsilon
+  betas: [0.9, 0.999]         # Adam beta参数
+  
+  # 学习率调度
+  scheduler: "cosine_with_warmup"  # 调度器类型
+  min_lr_ratio: 0.01           # 最小学习率比例
+  
+  # 早停配置
+  early_stopping:
+    enabled: true              # 是否启用早停
+    patience: 5                # 容忍轮数
+    min_delta: 0.001           # 最小改进量
+    monitor: "val_loss"        # 监控指标
+    mode: "min"                # 监控模式: min, max
+    restore_best_weights: true # 恢复最佳权重
+  
+  # 梯度裁剪
+  gradient_clipping:
+    enabled: true              # 是否启用梯度裁剪
+    max_norm: 1.0              # 最大梯度范数
+    norm_type: 2               # 范数类型
+
+# =============================================================================
+# 硬件和性能配置
+# =============================================================================
+hardware:
+  # GPU配置
+  accelerator: "auto"          # 加速器: auto, gpu, cpu
+  devices: 1                   # 设备数量
+  precision: "16-mixed"        # 精度: 32, 16-mixed, bf16-mixed
+  
+  # 内存优化
+  accumulate_grad_batches: 1   # 梯度累积批次
+  gradient_clip_val: null      # 梯度裁剪值
+  
+  # 编译优化 (PyTorch 2.0+)
+  compile_model: false         # 是否编译模型
+  
+  # 分布式训练
+  strategy: null               # 分布式策略: null, ddp, deepspeed
+
+# =============================================================================
+# 日志和监控配置
+# =============================================================================
+logging:
+  level: "INFO"                # 日志级别: DEBUG, INFO, WARNING, ERROR
+  
+  # 控制台日志
+  console:
+    enabled: true              # 启用控制台日志
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 文件日志  
+  file:
+    enabled: true              # 启用文件日志
+    path: "logs/training.log"  # 日志文件路径
+    max_size: "10MB"           # 最大文件大小
+    backup_count: 5            # 备份文件数量
+  
+  # TensorBoard
+  tensorboard:
+    enabled: true              # 启用TensorBoard
+    log_dir: "logs/tensorboard" # TensorBoard日志目录
+    log_every_n_steps: 10      # 记录步长间隔
+  
+  # Weights & Biases (可选)
+  wandb:
+    enabled: false             # 启用W&B
+    project: "tcr-peptide-binding"  # 项目名称
+    entity: null               # 用户/团队名称
+    tags: ["tcr", "peptide", "binding", "esm++", "lora"]
+
+# =============================================================================
+# 模型保存配置
+# =============================================================================
+checkpointing:
+  # 保存配置
+  save_dir: "outputs/checkpoints"  # 检查点保存目录
+  save_top_k: 1                # 保存最佳模型数量
+  save_last: true              # 保存最后一个模型
+  save_every_n_epochs: null    # 每N个epoch保存 (null=不定期保存)
+  
+  # 监控指标
+  monitor: "val_loss"          # 监控指标
+  mode: "min"                  # 监控模式
+  
+  # 文件命名
+  filename: "epoch={epoch:02d}-val_loss={val_loss:.4f}"
+  auto_insert_metric_name: false
+
+# =============================================================================
+# 评估配置
+# =============================================================================
+evaluation:
+  # 评估指标
+  metrics:
+    - "accuracy"               # 准确率
+    - "precision"              # 精确率  
+    - "recall"                 # 召回率
+    - "f1"                     # F1分数
+    - "roc_auc"               # AUC-ROC
+    - "pr_auc"                # AUC-PR
+  
+  # 结果保存
+  save_predictions: true       # 保存预测结果
+  save_probabilities: true     # 保存预测概率
+  save_attention_weights: false # 保存注意力权重
+  
+  # 可视化
+  plot_confusion_matrix: true  # 绘制混淆矩阵
+  plot_roc_curve: true        # 绘制ROC曲线
+  plot_pr_curve: true         # 绘制PR曲线
+  plot_attention_heatmap: false # 绘制注意力热图
+
+# =============================================================================
+# 输出配置
+# =============================================================================
+outputs:
+  base_dir: "outputs"          # 输出根目录
+  
+  # 子目录
+  checkpoints_dir: "checkpoints"     # 模型检查点
+  logs_dir: "logs"                   # 日志文件
+  results_dir: "results"             # 结果文件
+  plots_dir: "plots"                 # 图表文件
+  predictions_dir: "predictions"     # 预测结果
+
+# =============================================================================
+# 实验配置 (可选)
+# =============================================================================
+experiment:
+  name: "tcr_peptide_binding_default"  # 实验名称
+  description: "TCR-肽结合预测默认配置实验"  # 实验描述
+  tags: ["default", "lora", "cross-attention"]  # 实验标签
+  
+  # 随机种子
+  seed: 42                     # 全局随机种子
+  deterministic: true          # 是否使用确定性训练
+
+# =============================================================================
+# 调试和开发配置
+# =============================================================================
+debug:
+  enabled: false               # 启用调试模式
+  fast_dev_run: false          # 快速开发运行 (只运行几个batch)
+  overfit_batches: 0           # 过拟合批次数 (用于调试)
+  limit_train_batches: null    # 限制训练批次数
+  limit_val_batches: null      # 限制验证批次数
+  profiler: null               # 性能分析器: null, simple, advanced
