@@ -6,7 +6,7 @@
 
 ### 核心技术栈
 - **预训练模型**: ESM++ (Evolutionary Scale Modeling++)
-- **微调技术**: 支持7种PEFT方法 (LoRA, AdaLoRA, VeRA, BOFT, FourierFT, OFT, IA3)
+- **微调技术**: 多种 PEFT：LoRA、AdaLoRA、VeRA、BOFT、OFT、IA3、Prefix、Prompt、Token Adapter、Pfeiffer Adapter、Houlsby Adapter。
 - **注意力机制**: 双向Cross Attention融合
 - **训练框架**: PyTorch Lightning
 - **配置管理**: YAML配置文件 + 命令行参数覆盖
@@ -17,42 +17,41 @@ TCR序列 ──┐
           ├─→ ESM++ 编码器 ──┐
 肽序列 ───┘                  ├─→ Cross Attention ──→ 分类器 ──→ 结合预测
                             ┘
-            ↓ PEFT微调        ↓ 双向注意力      ↓ 池化+融合
-          (LoRA/AdaLoRA/...)  (TCR↔肽相互关注)  (连接/自适应)
+            ↓       								↓ 双向注意力      	↓ 池化+融合
+           PEFT微调   						(TCR↔肽相互关注)  		(连接/自适应)
 ```
 
 ## 📁 项目结构
 
 ```
-tcr_peptide_binding/
-├── configs/                    # 配置文件
-│   └── default_config.yaml    # 默认配置（详细注释）
-├── src/                       # 源代码
-│   ├── models/               # 模型组件
-│   │   ├── encoders.py       # TCR和肽编码器
-│   │   ├── attention.py      # Cross Attention机制
-│   │   ├── classifiers.py    # 结合预测分类器
-│   │   └── binding_model.py  # 完整模型组装
-│   ├── data/                 # 数据处理
-│   │   ├── dataset.py        # 数据集和数据加载器
-│   │   └── preprocessing.py  # 数据预处理工具
-│   ├── training/             # 训练模块
-│   │   └── lightning_module.py # PyTorch Lightning模块
-│   └── utils/                # 工具函数
-│       ├── config.py         # 配置管理
-│       ├── logging_setup.py  # 日志配置
-│       ├── paths.py          # 路径管理
-│       ├── reproducibility.py # 随机种子设置
-│       └── metrics.py        # 评估指标
-├── scripts/                  # 执行脚本
-│   └── train.py             # 主训练脚本
-├── docs/                    # 文档
-├── tests/                   # 测试
-└── outputs/                 # 输出目录
-    ├── checkpoints/         # 模型检查点
-    ├── logs/               # 训练日志
-    ├── results/            # 评估结果
-    └── plots/              # 可视化图表
+tcr_peptide_binding_v2/
+├── configs/
+│   └── default_config.yaml        # 默认配置（可被命令行覆盖）
+├── data/
+│   └── tcr_peptide.csv            # 示例数据 (TCR, Peptide, Label)
+├── scripts/
+│   └── train.py                   # 训练入口脚本
+├── src/
+│   ├── data/
+│   │   ├── dataset.py             # 数据集 + DataLoader (分词、padding、mask)
+│   │   └── preprocessing.py       # 预处理与数据质量分析
+│   ├── models/
+│   │   ├── attention.py           # Cross Attention 融合（标准/增强）
+│   │   ├── binding_model.py       # 编码器+融合+分类器组装
+│   │   ├── classifiers.py         # 分类头（多种池化/融合）
+│   │   ├── custom_tuning.py       # 自定义 Prefix/Prompt Tuning
+│   │   ├── encoders.py            # ESM++ 编码器 + PEFT 选择/装配
+│   │   └── adapters.py            # Token/Pfeiffer/Houlsby Adapter（hook）
+│   ├── training/
+│   │   └── lightning_module.py    # Lightning 模块（train/val/test/predict）
+│   └── utils/
+│       ├── config.py              # 配置加载/合并/命令行覆盖/保存
+│       ├── logging_setup.py       # 日志初始化（控制台/文件/TensorBoard）
+│       ├── paths.py               # 输出目录管理
+│       ├── reproducibility.py     # 随机种子与确定性
+│       └── tokenizer_manager.py   # 分词器缓存（ESM++ 模型 → tokenizer）
+├── LICENSE
+├── README.md
 ```
 
 ## 🚀 快速开始
@@ -72,31 +71,64 @@ CASSLGDSEQFF,VLQAGQVVL,0
 ### 2. 开始训练
 
 ```bash
-# 使用默认配置训练
-python scripts/train.py --data_path data/your_data.csv
-
-# 自定义参数训练
 python scripts/train.py \
-    --data_path data/your_data.csv \
-    --batch_size 8 \
-    --learning_rate 1e-5 \
-    --epochs 20 \
-    --peft_method lora
-
-# 使用自定义配置文件
-python scripts/train.py \
-    --config configs/my_config.yaml \
-    --data_path data/your_data.csv
+  --data_path data/tcr_peptide.csv \
+  --peft_method lora \
+  --batch_size 8 \
+  --epochs 20
 ```
 
-## ⚙️ 配置说明
+## 常用命令行参数
+
+- 基础：`--data_path`（必填）、`--batch_size`、`--learning_rate/--lr`、`--epochs`、`--output_dir`
+- PEFT：`--peft_method`，可选
+  - `lora`/`adalora`/`vera`/`boft`/`oft`/`ia3`/`prefix`/`prompt`/`token_adapter`/`pfeiffer_adapter`/`houlsby_adapter`
+- 数据：`--max_tcr_length`、`--max_peptide_length`、`--test_size`、`--val_size`
+- 硬件：`--devices/--gpus`、`--precision`（32/16-mixed/bf16-mixed）、`--accumulate_grad_batches`
+- 调试：`--fast_dev_run`
+- 其它：`--output_dir`（默认 `outputs/`）
+
+命令行会覆盖 YAML 中对应字段（映射见 `src/utils/config.py`）。最终生效配置会保存至 `outputs/<exp>/final_config.yaml`。
 
 
+
+## ⚙️ 配置说明配置详解（configs/default_config.yaml）
+
+- `tcr_encoder` / `peptide_encoder`：ESM++ 模型路径、是否冻结
+- `peft`：方法选择与各自超参（见下一节）
+- `fusion`：Cross Attention 融合
+- `classifier`：池化（`cls|mean|max|attention`）、融合（`concat|add|multiply|adaptive`）
+- `data`：最大长度、划分比例、基础预处理
+- `training`：优化器（AdamW/Adam）、调度（cosine_with_warmup|cosine|none）、早停、梯度裁剪
+- `hardware`：加速器（auto/gpu/cpu）、设备数、精度、梯度累积
+- `logging`：控制台/文件/TensorBoard 配置
+- `checkpointing`：保存/监控指标
+
+## 支持的 PEFT 方法与实现要点
+
+- LoRA (`lora`)、AdaLoRA (`adalora`)、VeRA (`vera`)、BOFT (`boft`)、OFT (`oft`)、IA3 (`ia3`)：
+  - 通过 PEFT 库标准装配（`src/models/encoders.py::_setup_peft`）。
+  - 可配置目标模块、秩、dropout 等。
+- Prefix Tuning (`prefix`)：
+  - 自定义实现（`src/models/custom_tuning.py`）。
+  - 在编码器输出前拼接可学习前缀；支持 `prefix_projection`（低维→线性投影到 hidden_size）。
+- Prompt Tuning (`prompt`)：
+  - 自定义实现（`src/models/custom_tuning.py`）。
+  - 拼接全维可学习 prompt
+- Token Adapter (`token_adapter`)：
+  - 在 embedding 输出处通过瓶颈层调制 token 表示，不改变下游序列长度（`src/models/adapters.py::TokenAdapterManager`）。
+- Pfeiffer Adapter (`pfeiffer_adapter`)：
+  - 在 Transformer 层内部（attention/FFN 之间）插入瓶颈结构，hook 到多层（`src/models/adapters.py::PfeifferAdapterManager`）。
+- Houlsby Adapter (`houlsby_adapter`)：
+  - 并行适配（注意力与 FFN 两支），可分别开关（`use_attention_adapter|use_ffn_adapter`）。
+
+## Cross Attention 融合
 
 ### Cross Attention策略
 
 - 双向交叉注意力
 - 简单有效，计算开销小
+- 双向交叉注意力（TCR→Peptide 与 Peptide→TCR），残差 + 层归一化 + FFN。
 
 ### 硬件配置建议
 
@@ -113,45 +145,6 @@ tensorboard --logdir outputs/logs/tensorboard
 - **F1分数**: `val_f1`
 - **AUC指标**: `val_auroc`, `val_auprc`
 - **学习率**: `learning_rate`
-
-## 🔧 高级配置
-
-### 自定义配置文件
-
-复制 `configs/default_config.yaml` 并修改所需参数：
-
-```yaml
-# 模型配置
-model:
-  tokenizer_name: "Synthyra/ESMplusplus_large"
-
-# PEFT配置
-peft:
-  method: "adalora"  # 使用AdaLoRA
-  lora_r: 16         # 增加LoRA秩
-  lora_alpha: 32
-
-# 训练配置  
-training:
-  batch_size: 16
-  learning_rate: 1e-5
-  epochs: 30
-
-# 融合配置
-fusion:
-  type: "enhanced"   # 使用增强版融合
-  use_contrastive: true
-```
-
-### 命令行参数覆盖
-
-```bash
-python scripts/train.py \
-    --config configs/my_config.yaml \
-    --batch_size 8 \              # 覆盖配置文件中的batch_size
-    --peft_method vera \          # 覆盖PEFT方法
-    --devices 2                   # 使用2个GPU
-```
 
 ## 📈 结果分析
 

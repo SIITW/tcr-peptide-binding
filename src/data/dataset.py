@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-TCR-肽数据集处理模块
-
-处理TCR-肽结合预测的数据集，包括：
-1. 数据集类：处理序列对和标签
-2. 数据加载器创建：训练/验证/测试数据流
-3. 批处理：动态padding和掩码生成
-
-数据格式：
-- 输入：TCR序列 + 肽序列
-- 输出：结合标签（0/1）
-"""
-
 import torch
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
@@ -29,7 +16,7 @@ class TCRPeptideDataset(Dataset):
     """
     TCR-肽结合预测数据集
 
-    处理TCR和肽序列对，进行分词、编码和批处理。
+    处理TCR和肽序列，进行分词、编码和批处理。
     支持动态padding和注意力掩码生成。
     """
 
@@ -88,7 +75,7 @@ class TCRPeptideDataset(Dataset):
         self._validate_sequences()
 
     def _validate_sequences(self):
-        """验证序列质量（中文注释）"""
+        """验证序列质量"""
         logger.info("Validating sequence quality...")
 
         # 检查序列长度分布
@@ -146,7 +133,7 @@ class TCRPeptideDataset(Dataset):
             max_length=self.max_tcr_length,
             padding="max_length",  # 填充到最大长度
             truncation=True,  # 截断超长序列
-            return_tensors="pt",  # 返回PyTorch张量
+            return_tensors="pt",  # 返回张量
         )
 
         # 肽序列分词
@@ -215,7 +202,7 @@ def create_dataloaders(
         max_peptide_length=max_peptide_length,
     )
 
-    # 创建验证数据集（如果提供）
+    # 创建验证数据集
     val_dataset = None
     if val_df is not None and len(val_df) > 0:
         val_dataset = TCRPeptideDataset(
@@ -243,8 +230,8 @@ def create_dataloaders(
         batch_size=batch_size,
         shuffle=shuffle_train,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),  # 如果有GPU则使用pin_memory加速
-        drop_last=False,  # 保留最后一个不完整的batch
+        pin_memory=torch.cuda.is_available(),  # 使用固定内存加速
+        drop_last=False,  # 保留最后一个不完整批次
     )
 
     val_loader = None
@@ -252,19 +239,19 @@ def create_dataloaders(
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
-            shuffle=False,  # 验证集不需要打乱
+            shuffle=False,
             num_workers=num_workers,
-            pin_memory=torch.cuda.is_available(),
-            drop_last=False,
+            pin_memory=torch.cuda.is_available(),  # 使用固定内存加速
+            drop_last=False,  # 保留最后一个不完整批次
         )
 
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
-        shuffle=False,  # 测试集不需要打乱
+        shuffle=False,
         num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(),
-        drop_last=False,
+        pin_memory=torch.cuda.is_available(),  # 使用固定内存加速
+        drop_last=False,  # 保留最后一个不完整批次
     )
 
     logger.info("Data loader creation completed:")
@@ -295,7 +282,7 @@ def prepare_data_splits(
         stratify: 是否按标签分层采样
 
     返回:
-        (训练集, 验证集, 测试集) DataFrame
+        训练集, 验证集, 测试集
     """
 
     logger.info(f"Loading data: {data_path}")
@@ -307,7 +294,7 @@ def prepare_data_splits(
     required_columns = ["TCR", "Peptide", "Label"]
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
-        raise ValueError(f"数据文件缺少必需的列: {missing_columns}")
+        raise ValueError(f"Data file missing required columns: {missing_columns}")
 
     logger.info("Original data statistics:")
     logger.info(f"   Total samples: {len(df)}")
@@ -315,23 +302,48 @@ def prepare_data_splits(
     logger.info(f"   Negative: {(df['Label']==0).sum()} ({100*(df['Label']==0).mean():.1f}%)")
 
     # 数据清理
-    df = df.dropna(subset=["TCR", "Peptide", "Label"])  # 删除缺失值
-    df = df[df["TCR"].str.len() > 0]  # 删除空序列
+    df = df.dropna(subset=["TCR", "Peptide", "Label"])
+    df = df[df["TCR"].str.len() > 0]
     df = df[df["Peptide"].str.len() > 0]
 
-    logger.info(f"   Samples after cleaning: {len(df)}")
+    logger.info("Applying strict amino acid filtering...")
+    
+    # 标准20氨基酸
+    STANDARD_AA = set("ACDEFGHIKLMNPQRSTVWY")
+    
+    def contains_only_standard_aa(sequence):
+        """检查序列是否只包含标准氨基酸"""
+        if not sequence:
+            return False
+        return set(sequence.upper()) <= STANDARD_AA
+    
+    initial_count = len(df)
+    
+    # 过滤TCR序列中包含非标准氨基酸的数据
+    df = df[df["TCR"].apply(contains_only_standard_aa)]
+    tcr_filtered_count = len(df)
+    
+    # 过滤Peptide序列中包含非标准氨基酸的数据
+    df = df[df["Peptide"].apply(contains_only_standard_aa)]
+    final_count = len(df)
+    
+    logger.info(f"   Samples after basic cleaning: {initial_count}")
+    logger.info(f"   Samples after TCR AA filtering: {tcr_filtered_count} (removed: {initial_count - tcr_filtered_count})")
+    logger.info(f"   Samples after Peptide AA filtering: {final_count} (removed: {tcr_filtered_count - final_count})")
+    logger.info(f"   Total removed by strict AA filtering: {initial_count - final_count}")
+    logger.info(f"   Final samples: {final_count}")
 
     # 分割数据
     stratify_column = df["Label"] if stratify else None
 
-    # 首先分出测试集
+    # 分出测试集
     train_val_df, test_df = train_test_split(
         df, test_size=test_size, random_state=random_state, stratify=stratify_column
     )
 
-    # 从训练+验证集中分出验证集
+    # 分出验证集
     if val_size > 0:
-        val_ratio = val_size / (1 - test_size)  # 调整验证集比例
+        val_ratio = val_size / (1 - test_size) 
         stratify_train_val = train_val_df["Label"] if stratify else None
 
         train_df, val_df = train_test_split(
@@ -342,7 +354,7 @@ def prepare_data_splits(
         )
     else:
         train_df = train_val_df
-        val_df = pd.DataFrame()  # 空DataFrame
+        val_df = pd.DataFrame() 
 
     logger.info("Data split results:")
     logger.info(f"   Train: {len(train_df)} samples ({100*len(train_df)/len(df):.1f}%)")

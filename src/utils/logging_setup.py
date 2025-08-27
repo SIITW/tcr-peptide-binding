@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-日志设置工具
 
-提供统一的日志配置功能，支持控制台和文件日志。
-"""
 
 import logging
 import logging.handlers
@@ -27,7 +23,6 @@ def setup_logging(config: Optional[Dict[str, Any]] = None):
     level_str = config.get("level", "INFO").upper()
     level = getattr(logging, level_str, logging.INFO)
 
-    # 清除现有的处理器
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)

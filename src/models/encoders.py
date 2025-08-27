@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""
-序列编码器模块
-
-包含TCR和肽序列的编码器实现，支持多种PEFT微调方法：
-- LoRA (Low-Rank Adaptation)
-- AdaLoRA (Adaptive LoRA)
-- VeRA (Vector-based Random Matrix Adaptation)
-- BOFT (Butterfly Factorization)
-- FourierFT (Fourier Transform based Fine-tuning)
-- OFT (Orthogonal Fine-tuning)
-- IA3 (Infused Adapter by Inhibiting and Amplifying Inner Activations)
-"""
 
 import torch
 import torch.nn as nn
@@ -20,14 +8,16 @@ from peft import (
     AdaLoraConfig,
     VeraConfig,
     BOFTConfig,
-    FourierFTConfig,
     OFTConfig,
     IA3Config,
     PrefixTuningConfig,
+    PromptTuningConfig,
+    AdaptionPromptConfig,
     get_peft_model,
     TaskType,
     PeftModel,
 )
+from .adapters import create_adapter
 from typing import Dict, Any, Optional
 import logging
 
@@ -54,7 +44,7 @@ class BaseSequenceEncoder(nn.Module):
         初始化基础编码器
 
         参数:
-            model_name: 微调模型的hugging face路径
+            model_name: 模型仓库路径（如 Hugging Face 名称或本地路径）
             peft_config: PEFT配置字典
             freeze_base_model: 是否冻结基础模型参数
         """
@@ -83,10 +73,17 @@ class BaseSequenceEncoder(nn.Module):
 
         # 应用PEFT方法
         self.peft_model = None
+        self.custom_adapter = None
+        self.custom_tuning = None
         if peft_config:
-            self.peft_model = self._setup_peft(peft_config)
+            peft_method = peft_config.get("method", "lora").lower()
+            if peft_method in ["token_adapter", "pfeiffer_adapter", "houlsby_adapter"]:
+                self.custom_adapter = self._setup_custom_adapter(peft_config)
+            elif peft_method in ["prefix", "prompt"]:
+                self.custom_tuning = self._setup_custom_tuning(peft_method, peft_config)
+            else:
+                self.peft_model = self._setup_peft(peft_config)
 
-        # 获取隐藏维度供下游任务使用
         self.hidden_dim = self.config.hidden_size
 
     def _setup_peft(self, peft_config: Dict[str, Any]) -> PeftModel:
@@ -102,21 +99,22 @@ class BaseSequenceEncoder(nn.Module):
         peft_method = peft_config.get("method", "lora").lower()
         logger.info(f"Setting up PEFT method: {peft_method.upper()}")
 
-        # LoRA - 最稳定可靠的方法（推荐）
+        # LoRA 方法
         if peft_method == "lora":
             config = LoraConfig(
                 task_type=TaskType.FEATURE_EXTRACTION,
                 r=peft_config.get("lora_r", 8),  # 低秩矩阵的秩
                 lora_alpha=peft_config.get("lora_alpha", 16),  # LoRA缩放参数
-                lora_dropout=peft_config.get("lora_dropout", 0.05),  # LoRA dropout
+                lora_dropout=peft_config.get("lora_dropout", 0.05),  # LoRA丢弃率
                 target_modules=peft_config.get(
                     "target_modules", ["attn.layernorm_qkv.1", "attn.out_proj"]
-                ),  # 目标模块
-                bias=peft_config.get("bias", "none"),  # bias处理方式
+                ), 
+                bias=peft_config.get("bias", "none"), 
             )
 
-        # AdaLoRA - 自适应LoRA，动态调整秩
+        # AdaLoRA方法
         elif peft_method == "adalora":
+            total_steps = peft_config.get("total_step", 3500) 
             config = AdaLoraConfig(
                 task_type=TaskType.FEATURE_EXTRACTION,
                 init_r=peft_config.get("init_r", 12),  # 初始秩
@@ -133,9 +131,10 @@ class BaseSequenceEncoder(nn.Module):
                 beta1=peft_config.get("beta1", 0.85),  # 敏感度参数
                 beta2=peft_config.get("beta2", 0.85),  # 不确定性参数
                 orth_reg_weight=peft_config.get("orth_reg_weight", 0.5),  # 正交正则化权重
+                total_step=total_steps,  # 总训练步数，AdaLoRA必需参数
             )
 
-        # VeRA - 向量化随机矩阵适应，内存效率更高
+        # VeRA 方法
         elif peft_method == "vera":
             config = VeraConfig(
                 task_type=TaskType.FEATURE_EXTRACTION,
@@ -143,12 +142,12 @@ class BaseSequenceEncoder(nn.Module):
                 target_modules=peft_config.get(
                     "target_modules", ["attn.layernorm_qkv.1", "attn.out_proj"]
                 ),
-                vera_dropout=peft_config.get("vera_dropout", 0.0),  # VeRA dropout
+                vera_dropout=peft_config.get("vera_dropout", 0.0),  # VeRA丢弃率
                 d_initial=peft_config.get("d_initial", 0.1),  # 初始lambda值
                 projection_prng_key=peft_config.get("projection_prng_key", 0),  # 随机投影种子
             )
 
-        # BOFT - 蝶式因子分解，新兴方法
+        # BOFT 方法
         elif peft_method == "boft":
             config = BOFTConfig(
                 task_type=TaskType.FEATURE_EXTRACTION,
@@ -157,43 +156,43 @@ class BaseSequenceEncoder(nn.Module):
                 ),
                 boft_block_size=peft_config.get("boft_block_size", 4),  # 块大小
                 boft_block_num=peft_config.get("boft_block_num", 0),  # 块数量
-                boft_dropout=peft_config.get("boft_dropout", 0.0),  # BOFT dropout
+                boft_dropout=peft_config.get("boft_dropout", 0.0),  # BOFT 丢弃率
             )
 
-        # FourierFT - 基于傅里叶变换的微调
-        elif peft_method == "fourierft":
-            config = FourierFTConfig(
-                task_type=TaskType.FEATURE_EXTRACTION,
-                target_modules=peft_config.get(
-                    "target_modules", ["attn.layernorm_qkv.1", "attn.out_proj"]
-                ),
-                n_frequency=peft_config.get("n_frequency", 1000),  # 频率数量
-                scaling=peft_config.get("scaling", 300.0),  # 缩放因子
-            )
 
-        # OFT - 正交微调，保持模型几何性质
+        # OFT 方法
         elif peft_method == "oft":
             config = OFTConfig(
                 task_type=TaskType.FEATURE_EXTRACTION,
                 target_modules=peft_config.get(
                     "target_modules", ["attn.layernorm_qkv.1", "attn.out_proj"]
                 ),
-                r=peft_config.get("oft_r", 8),  # OFT秩
-                oft_dropout=peft_config.get("oft_dropout", 0.0),  # OFT dropout
+                # 只设置 oft_block_size，不设置 r 参数以避免冲突
+                oft_block_size=peft_config.get("oft_block_size", 4),  # OFT块大小
                 coft=peft_config.get("coft", False),  # 约束OFT
                 eps=peft_config.get("eps", 6e-5),  # 数值稳定性参数
                 block_share=peft_config.get("block_share", False),  # 块共享
             )
 
-        # IA3 - 参数最少的方法，适合极度资源受限场景
+        # IA3 方法
         elif peft_method == "ia3":
+            # IA3需要feedforward_modules是target_modules的子集
+            feedforward_modules = peft_config.get("feedforward_modules", ["ffn.3"])
+            target_modules = peft_config.get(
+                "target_modules", ["attn.layernorm_qkv.1", "attn.out_proj"] + feedforward_modules
+            )
+            # 确保feedforward_modules是target_modules的子集
+            for ff_module in feedforward_modules:
+                if ff_module not in target_modules:
+                    target_modules.append(ff_module)
+            
             config = IA3Config(
                 task_type=TaskType.FEATURE_EXTRACTION,
-                target_modules=peft_config.get("target_modules", ["k_proj", "v_proj"]),
-                feedforward_modules=peft_config.get("feedforward_modules", ["down_proj"]),
+                target_modules=target_modules,
+                feedforward_modules=feedforward_modules,
             )
 
-        # Prefix Tuning - 前缀微调
+        # 前缀微调（Prefix Tuning）
         elif peft_method == "prefix":
             config = PrefixTuningConfig(
                 task_type=TaskType.FEATURE_EXTRACTION,
@@ -202,15 +201,36 @@ class BaseSequenceEncoder(nn.Module):
                 encoder_hidden_size=self.config.hidden_size,
             )
 
+        # 提示微调（Prompt Tuning）
+        elif peft_method == "prompt":
+            config = PromptTuningConfig(
+                task_type=TaskType.FEATURE_EXTRACTION,
+                num_virtual_tokens=peft_config.get("num_virtual_tokens", 20),
+                prompt_tuning_init=peft_config.get("prompt_tuning_init", "RANDOM"),  # RANDOM, TEXT
+                prompt_tuning_init_text=peft_config.get("prompt_tuning_init_text", "Classify if TCR binds to peptide"),
+                tokenizer_name_or_path=peft_config.get("tokenizer_name_or_path", self.model_name),
+            )
+
+
+        # 自适应提示
+        elif peft_method == "adaption_prompt":
+            config = AdaptionPromptConfig(
+                adapter_len=peft_config.get("adapter_len", 10),  # 适配器长度
+                adapter_layers=peft_config.get("adapter_layers", 30),  # 适配器层数
+                task_type=TaskType.FEATURE_EXTRACTION,
+            )
+
+        # 自定义Adapter方法
+        elif peft_method in ["token_adapter", "pfeiffer_adapter", "houlsby_adapter"]:
+            return None
+            
         else:
             raise ValueError(f"Unsupported PEFT method: {peft_method}")
 
-        # 应用PEFT配置
         try:
             peft_model = get_peft_model(self.base_model, config)
             logger.info(f"{peft_method.upper()} configuration applied successfully")
 
-            # 打印可训练参数信息
             total_params = sum(p.numel() for p in peft_model.parameters())
             trainable_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
             logger.info(
@@ -221,6 +241,98 @@ class BaseSequenceEncoder(nn.Module):
             return peft_model
         except Exception as e:
             logger.error(f"PEFT setup failed: {e}")
+            raise
+
+    def _setup_custom_adapter(self, peft_config: Dict[str, Any]) -> nn.Module:
+        """
+        自定义Adapter方法
+        
+        参数:
+            peft_config: PEFT配置字典
+            
+        返回:
+            配置好的Adapter
+        """
+        peft_method = peft_config.get("method", "lora").lower()
+        logger.info(f"Setting up custom adapter method: {peft_method.upper()}")
+        
+        try:
+            # 获取隐藏层维度
+            hidden_size = self.config.hidden_size
+            
+            # 创建自定义adapter
+            adapter = create_adapter(peft_method, peft_config, hidden_size, self.base_model)
+            
+            # 打印可训练参数信息
+            base_total_params = sum(p.numel() for p in self.base_model.parameters())
+            base_trainable_params = sum(p.numel() for p in self.base_model.parameters() if p.requires_grad)
+            adapter_params = sum(p.numel() for p in adapter.parameters())
+            total_params = base_total_params + adapter_params
+            trainable_params = base_trainable_params + adapter_params
+            
+            logger.info(f"{peft_method.upper()} adapter created successfully")
+            logger.info(
+                f"Parameters: total={total_params:,}, trainable={trainable_params:,} "
+                f"({100 * trainable_params / total_params:.2f}%)"
+            )
+            logger.info(f"Adapter parameters: {adapter_params:,}")
+            
+            return adapter
+            
+        except Exception as e:
+            logger.error(f"Custom adapter setup failed: {e}")
+            raise
+
+    def _setup_custom_tuning(self, tuning_type: str, peft_config: Dict[str, Any]):
+        """
+        自定义的prefix/prompt tuning
+        
+        参数:
+            tuning_type: tuning类型 ("prefix" 或 "prompt")
+            peft_config: PEFT配置
+            
+        返回:
+            CustomTuningWrapper实例
+        """
+        try:
+            from .custom_tuning import CustomTuningWrapper
+            
+            # 准备配置
+            tuning_config = {
+                "hidden_size": self.config.hidden_size,
+                "num_virtual_tokens": peft_config.get("num_virtual_tokens", 20),
+            }
+            
+            if tuning_type == "prefix":
+                tuning_config.update({
+                    "prefix_projection": peft_config.get("prefix_projection", True),
+                    "prefix_hidden_size": peft_config.get("prefix_hidden_size", None),
+                })
+            elif tuning_type == "prompt":
+                tuning_config.update({
+                    "prompt_init": peft_config.get("prompt_tuning_init", "random"),
+                    "prompt_init_text": peft_config.get("prompt_tuning_init_text", "Classify if TCR binds to peptide"),
+                    "tokenizer": None,  # 待实现：如果需要基于文本初始化
+                })
+            
+            # 创建tuning wrapper
+            custom_tuning = CustomTuningWrapper(tuning_type, tuning_config)
+            
+            logger.info(f"Custom {tuning_type} tuning setup completed")
+            
+            # 打印参数统计
+            trainable_params = sum(p.numel() for p in custom_tuning.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in self.base_model.parameters())
+            
+            logger.info(
+                f"Parameters: total={total_params:,}, trainable={trainable_params:,} "
+                f"({100 * trainable_params / total_params:.2f}%)"
+            )
+            
+            return custom_tuning
+            
+        except Exception as e:
+            logger.error(f"Custom {tuning_type} tuning setup failed: {e}")
             raise
 
     def forward(self, input_ids, attention_mask, return_dict=True):
@@ -235,16 +347,50 @@ class BaseSequenceEncoder(nn.Module):
         返回:
             模型输出，包含hidden_states等
         """
-        model = self.peft_model if self.peft_model else self.base_model
-        return model(input_ids=input_ids, attention_mask=attention_mask, return_dict=return_dict)
+        if self.custom_adapter is not None:
+            if self.custom_tuning is not None:
+                # 自定义adapter + tuning
+                outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=return_dict)
+                hidden_states = outputs.last_hidden_state if return_dict else outputs[0]
+                
+                # 应用自定义tuning
+                updated_hidden_states, updated_attention_mask = self.custom_tuning(hidden_states, attention_mask)
+                
+                if return_dict:
+                    outputs.last_hidden_state = updated_hidden_states
+                    outputs.updated_attention_mask = updated_attention_mask
+                else:
+                    outputs = (updated_hidden_states,) + outputs[1:]
+            elif self.peft_model is not None:
+                outputs = self.peft_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=return_dict)
+            else:
+                outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=return_dict)
+
+        else:
+            if self.custom_tuning is not None:
+                outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=return_dict)
+                hidden_states = outputs.last_hidden_state if return_dict else outputs[0]
+                
+                updated_hidden_states, updated_attention_mask = self.custom_tuning(hidden_states, attention_mask)
+                
+                if return_dict:
+                    outputs.last_hidden_state = updated_hidden_states
+                    outputs.updated_attention_mask = updated_attention_mask
+                else:
+                    outputs = (updated_hidden_states,) + outputs[1:]
+                    
+            elif self.peft_model is not None:
+                outputs = self.peft_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=return_dict)
+                
+            else:
+                outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=return_dict)
+        
+        return outputs
 
 
 class TCREncoder(BaseSequenceEncoder):
     """
     TCR序列编码器
-
-    专门用于编码T细胞受体(TCR)序列，继承自BaseSequenceEncoder，
-    具有完整的PEFT微调能力。
     """
 
     def __init__(self, config_dict: Dict[str, Any]):
@@ -273,9 +419,6 @@ class TCREncoder(BaseSequenceEncoder):
 class PeptideEncoder(BaseSequenceEncoder):
     """
     肽序列编码器
-
-    专门用于编码肽(Peptide)序列，继承自BaseSequenceEncoder，
-    具有完整的PEFT微调能力。
     """
 
     def __init__(self, config_dict: Dict[str, Any]):

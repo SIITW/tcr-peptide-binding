@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-配置管理工具
-
-提供配置文件的加载、验证、合并和管理功能。
-支持YAML配置文件和命令行参数覆盖。
-"""
 
 import yaml
 import argparse
@@ -19,13 +13,11 @@ logger = logging.getLogger(__name__)
 class ConfigManager:
     """
     配置管理器
-
-    负责配置文件的加载、验证、合并和参数覆盖。
     """
 
     def __init__(self, config_path: Optional[str] = None):
         """
-        初始化配置管理器
+        初始化
 
         参数:
             config_path: 配置文件路径
@@ -49,7 +41,7 @@ class ConfigManager:
         config_path = Path(config_path)
 
         if not config_path.exists():
-            raise FileNotFoundError(f"配置文件不存在: {config_path}")
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
         logger.info(f"Loading configuration file: {config_path}")
 
@@ -76,24 +68,24 @@ class ConfigManager:
 
         logger.info("Configuration summary:")
 
-        # 模型配置（中文注释）
+        # 模型配置
         if "model" in self.config:
             model_name = self.config["model"].get("tokenizer_name", "Unknown")
             logger.info(f"   Model: {model_name}")
 
-        # PEFT配置（中文注释）
+        # PEFT配置
         if "peft" in self.config:
             peft_enabled = self.config["peft"].get("enabled", False)
             peft_method = self.config["peft"].get("method", "None")
             logger.info(f"   PEFT: {peft_method if peft_enabled else 'Disabled'}")
 
-        # 融合配置（中文注释）
+        # 融合配置
         if "fusion" in self.config:
             fusion_type = self.config["fusion"].get("type", "standard")
             fusion_strategy = self.config["fusion"].get("strategy", "bidirectional")
             logger.info(f"   Fusion: {fusion_type} ({fusion_strategy})")
 
-        # 训练配置（中文注释）
+        # 训练配置
         if "training" in self.config:
             training = self.config["training"]
             batch_size = training.get("batch_size", "Unknown")
@@ -108,7 +100,6 @@ class ConfigManager:
         返回:
             是否通过验证
         """
-        # 跳过所有验证，直接返回通过
         return True
 
     def merge_config(
@@ -119,7 +110,7 @@ class ConfigManager:
 
         参数:
             override_config: 覆盖配置
-            merge_strategy: 合并策略 ('deep' 或 'shallow')
+            merge_strategy: 合并策略
 
         返回:
             合并后的配置
@@ -137,7 +128,7 @@ class ConfigManager:
         深度合并字典
 
         参数:
-            base: 基础字典（会被修改）
+            base: 基础字典
             override: 覆盖字典
         """
         for key, value in override.items():
@@ -170,12 +161,11 @@ class ConfigManager:
             "max_tcr_length": "data.max_tcr_length",
             "max_peptide_length": "data.max_peptide_length",
             "devices": "hardware.devices",
-            "gpus": "hardware.devices",  # 兼容性
+            "gpus": "hardware.devices", 
             "precision": "hardware.precision",
             "accumulate_grad_batches": "hardware.accumulate_grad_batches",
         }
 
-        # 应用覆盖
         override_count = 0
         for arg_name, config_path in arg_mappings.items():
             if hasattr(args, arg_name):
@@ -208,7 +198,7 @@ class ConfigManager:
 
     def get(self, key: str, default: Any = None) -> Any:
         """
-        获取配置值（支持点分隔路径）
+        获取配置值
 
         参数:
             key: 配置键 (支持 'section.subsection.key' 格式)
@@ -229,7 +219,7 @@ class ConfigManager:
 
     def set(self, key: str, value: Any):
         """
-        设置配置值（支持点分隔路径）
+        设置配置值
 
         参数:
             key: 配置键
@@ -308,5 +298,4 @@ def create_config_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     # 应用命令行覆盖
     final_config = manager.override_from_args(args)
 
-    # 跳过配置验证
     return final_config

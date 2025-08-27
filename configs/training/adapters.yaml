@@ -1,0 +1,103 @@
+# 基础设置
+experiment_name: "adapter_experiment"
+seed: 42
+
+# 数据配置
+data:
+  data_path: "data/tcr_peptide.csv"
+  train_size: 0.7
+  val_size: 0.1
+  test_size: 0.2
+  max_length: 512
+  batch_size: 16
+  num_workers: 4
+
+# 模型配置
+model:
+  pretrained_model: "Synthyra/ESMplusplus_large"
+  
+  tcr_encoder:
+    freeze_base_model: true
+    
+  peptide_encoder:
+    freeze_base_model: true
+  
+  fusion:
+    type: "standard"
+    
+  classifier:
+    pooling_method: "cls"
+    fusion_method: "concat"
+    hidden_dim: 512
+    dropout: 0.1
+
+# PEFT配置 - 选择其中一种adapter
+peft:
+  enabled: true
+  # method: "token_adapter"      # 在embedding层应用
+  method: "pfeiffer_adapter"   # 在Transformer层内应用  
+  # method: "houlsby_adapter"    # 在attention和FFN都应用
+  
+  # Token Adapter配置
+  token_adapter:
+    adapter_size: 64        # 瓶颈维度
+    dropout: 0.1           # dropout率
+    activation: "relu"      # 激活函数: relu, gelu, swish
+  
+  # Pfeiffer Adapter配置  
+  pfeiffer_adapter:
+    adapter_size: 64        # 瓶颈维度
+    dropout: 0.1           # dropout率
+    activation: "relu"      # 激活函数
+    target_layers: null     # 目标层索引，null表示所有层
+    
+  # Houlsby Adapter配置
+  houlsby_adapter:
+    adapter_size: 64              # 瓶颈维度
+    dropout: 0.1                 # dropout率
+    activation: "relu"            # 激活函数
+    use_attention_adapter: true   # 是否在attention层使用
+    use_ffn_adapter: true        # 是否在FFN层使用
+
+# 训练配置
+training:
+  epochs: 15                     # adapter通常需要更多轮次
+  learning_rate: 1e-4           # adapter可以用稍高的学习率
+  weight_decay: 0.01
+  warmup_steps: 200
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  
+  scheduler:
+    type: "cosine_with_warmup"
+    warmup_ratio: 0.1
+    
+  early_stopping:
+    enabled: true
+    monitor: "val_loss"
+    patience: 7                # adapter训练更稳定，可以更耐心
+    mode: "min"
+
+# 验证配置
+validation:
+  check_val_every_n_epoch: 1
+  val_check_interval: null
+
+# 日志配置
+logging:
+  log_every_n_steps: 50
+  enable_tensorboard: true
+  enable_wandb: false
+
+# 硬件配置
+hardware:
+  accelerator: "gpu"
+  devices: 1
+  precision: "16-mixed"
+  
+# 检查点配置
+checkpoint:
+  save_top_k: 3
+  monitor: "val_loss"
+  mode: "min"
+  save_last: true

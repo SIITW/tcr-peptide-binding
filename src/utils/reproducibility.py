@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-可重现性工具
 
-提供随机种子设置和确定性训练配置。
-"""
 
 import os
 import random
@@ -50,7 +46,6 @@ def set_deterministic():
     """
     设置确定性训练模式
 
-    注意：这可能会影响性能，但能确保完全可重现的结果
     """
 
     logger.info("Enabling deterministic training mode")

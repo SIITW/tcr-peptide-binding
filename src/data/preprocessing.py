@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""
-数据预处理模块
-
-提供数据预处理和示例数据生成功能：
-1. 序列预处理：清理、验证、标准化
-2. 示例数据生成：用于测试和演示
-3. 数据质量检查：统计和验证
-"""
 
 import pandas as pd
 import numpy as np
@@ -20,47 +12,40 @@ logger = logging.getLogger(__name__)
 class SequencePreprocessor:
     """
     序列预处理器
-
-    提供氨基酸序列的清理、验证和标准化功能
+    
+    提供氨基酸序列的清理、验证与标准化功能
     """
 
-    # 标准氨基酸字母
+    # 标准氨基酸字母 - 严格限制20种标准氨基酸
     STANDARD_AA = set("ACDEFGHIKLMNPQRSTVWY")
-
-    # 扩展氨基酸（包括一些变异）
-    EXTENDED_AA = STANDARD_AA | set("BJOUXZ")
 
     def __init__(
         self,
-        allow_extended_aa: bool = False,
-        remove_invalid_chars: bool = True,
         min_length: int = 3,
         max_length: Optional[int] = None,
     ):
         """
-        初始化预处理器
+        初始化预处理器（仅允许标准20种氨基酸）
+        说明：不再移除非法字符，包含非标准氨基酸的序列将被直接判定为不合法
 
         参数:
-            allow_extended_aa: 是否允许扩展氨基酸
-            remove_invalid_chars: 是否移除无效字符
-            min_length: 序列最小长度
-            max_length: 序列最大长度（可选）
+            min_length: 最小序列长度
+            max_length: 最大序列长度（可选）
         """
-        self.allow_extended_aa = allow_extended_aa
-        self.remove_invalid_chars = remove_invalid_chars
         self.min_length = min_length
         self.max_length = max_length
 
-        self.valid_chars = self.EXTENDED_AA if allow_extended_aa else self.STANDARD_AA
+        self.valid_chars = self.STANDARD_AA
 
         logger.info("Sequence preprocessor configuration:")
-        logger.info(f"   Allow extended amino acids: {allow_extended_aa}")
-        logger.info(f"   Remove invalid characters: {remove_invalid_chars}")
+        logger.info("   Only standard 20 amino acids allowed: ACDEFGHIKLMNPQRSTVWY")
+        logger.info("   Non-standard sequences will be REJECTED entirely")
         logger.info(f"   Length range: {min_length} - {max_length or 'unlimited'}")
 
     def clean_sequence(self, sequence: str) -> str:
         """
-        清理单个序列
+        清理单条序列
+        含非标准氨基酸的序列会在 validate_sequence 中被判定为不合法
 
         参数:
             sequence: 原始序列
@@ -70,16 +55,8 @@ class SequencePreprocessor:
         """
         if not sequence or not isinstance(sequence, str):
             return ""
-
-        # 转换为大写
         seq = sequence.upper().strip()
-
-        # 移除空白字符
         seq = re.sub(r"\s+", "", seq)
-
-        # 移除无效字符
-        if self.remove_invalid_chars:
-            seq = "".join(char for char in seq if char in self.valid_chars)
 
         return seq
 
@@ -117,10 +94,9 @@ class SequencePreprocessor:
 
         参数:
             sequences: 序列列表
-            sequence_type: 序列类型（用于日志）
-
+            sequence_type: 序列类型
         返回:
-            (处理后的序列列表, 统计信息)
+            处理后的序列列表, 统计信息
         """
         logger.info(f"Processing {len(sequences)} {sequence_type} sequences...")
 
@@ -164,134 +140,13 @@ class SequencePreprocessor:
 
         if stats["issues"]:
             logger.warning(f"   Found issues: {len(stats['issues'])}")
-            # 只显示前几个问题（中文注释）
+            # 只显示前几个问题
             for issue in stats["issues"][:5]:
                 logger.warning(f"     - {issue}")
             if len(stats["issues"]) > 5:
                 logger.warning(f"     - ... and {len(stats['issues'])-5} more issues")
 
         return processed_sequences, stats
-
-
-def create_sample_data(
-    output_path: str,
-    num_samples: int = 1000,
-    positive_ratio: float = 0.5,
-    tcr_length_range: Tuple[int, int] = (15, 30),
-    peptide_length_range: Tuple[int, int] = (8, 15),
-    random_seed: Optional[int] = 42,
-) -> pd.DataFrame:
-    """
-    创建示例TCR-肽结合数据（中文注释）
-
-    参数:
-        output_path: 输出文件路径
-        num_samples: 样本数量
-        positive_ratio: 正样本比例
-        tcr_length_range: TCR长度范围 (最小, 最大)
-        peptide_length_range: 肽长度范围 (最小, 最大)
-        random_seed: 随机种子
-
-    返回:
-        生成的数据DataFrame
-    """
-
-    if random_seed is not None:
-        np.random.seed(random_seed)
-
-    logger.info("Generating sample data:")
-    logger.info(f"   Number of samples: {num_samples}")
-    logger.info(f"   Positive ratio: {positive_ratio:.1%}")
-    logger.info(f"   TCR length range: {tcr_length_range}")
-    logger.info(f"   Peptide length range: {peptide_length_range}")
-
-    # 氨基酸频率（基于真实分布的近似）
-    aa_weights = {
-        "A": 0.074,
-        "C": 0.025,
-        "D": 0.054,
-        "E": 0.054,
-        "F": 0.047,
-        "G": 0.074,
-        "H": 0.026,
-        "I": 0.068,
-        "K": 0.058,
-        "L": 0.099,
-        "M": 0.025,
-        "N": 0.045,
-        "P": 0.050,
-        "Q": 0.039,
-        "R": 0.057,
-        "S": 0.081,
-        "T": 0.062,
-        "V": 0.068,
-        "W": 0.013,
-        "Y": 0.032,
-    }
-
-    amino_acids = list(aa_weights.keys())
-    weights = list(aa_weights.values())
-
-    def generate_sequence(length_range: Tuple[int, int]) -> str:
-        """生成指定长度范围的随机序列"""
-        length = np.random.randint(length_range[0], length_range[1] + 1)
-        return "".join(np.random.choice(amino_acids, size=length, p=weights))
-
-    # 生成序列
-    tcr_sequences = []
-    peptide_sequences = []
-    labels = []
-
-    # 确定正负样本数量
-    num_positive = int(num_samples * positive_ratio)
-    num_negative = num_samples - num_positive
-
-    logger.info(f"Generating {num_positive} positive and {num_negative} negative samples...")
-
-    # 生成正样本
-    for i in range(num_positive):
-        tcr_seq = generate_sequence(tcr_length_range)
-        peptide_seq = generate_sequence(peptide_length_range)
-
-        tcr_sequences.append(tcr_seq)
-        peptide_sequences.append(peptide_seq)
-        labels.append(1)
-
-    # 生成负样本
-    for i in range(num_negative):
-        tcr_seq = generate_sequence(tcr_length_range)
-        peptide_seq = generate_sequence(peptide_length_range)
-
-        tcr_sequences.append(tcr_seq)
-        peptide_sequences.append(peptide_seq)
-        labels.append(0)
-
-    # 创建DataFrame
-    df = pd.DataFrame({"TCR": tcr_sequences, "Peptide": peptide_sequences, "Label": labels})
-
-    # 打乱顺序
-    df = df.sample(frac=1, random_state=random_seed).reset_index(drop=True)
-
-    # 添加额外信息
-    df["TCR_Length"] = df["TCR"].str.len()
-    df["Peptide_Length"] = df["Peptide"].str.len()
-    df["Sample_ID"] = [f"Sample_{i+1:04d}" for i in range(len(df))]
-
-    # 保存文件
-    df.to_csv(output_path, index=False)
-
-    logger.info("Data generation completed:")
-    logger.info(
-        f"   TCR length: mean={df['TCR_Length'].mean():.1f}, "
-        f"range={df['TCR_Length'].min()}-{df['TCR_Length'].max()}"
-    )
-    logger.info(
-        f"   Peptide length: mean={df['Peptide_Length'].mean():.1f}, "
-        f"range={df['Peptide_Length'].min()}-{df['Peptide_Length'].max()}"
-    )
-    logger.info(f"   Saved to: {output_path}")
-
-    return df
 
 
 def analyze_data_quality(df: pd.DataFrame) -> Dict:

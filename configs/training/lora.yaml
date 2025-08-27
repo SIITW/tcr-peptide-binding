@@ -1,0 +1,97 @@
+# 基础设置
+experiment_name: "lora_experiment"
+seed: 42
+
+# 数据配置
+data:
+  data_path: "data/tcr_peptide.csv"
+  train_size: 0.7
+  val_size: 0.1
+  test_size: 0.2
+  max_length: 512
+  batch_size: 16
+  num_workers: 4
+
+# 模型配置
+model:
+  pretrained_model: "Synthyra/ESMplusplus_large"
+  
+  # TCR编码器配置
+  tcr_encoder:
+    freeze_base_model: true
+    
+  # Peptide编码器配置
+  peptide_encoder:
+    freeze_base_model: true
+  
+  # 融合配置
+  fusion:
+    type: "standard"  # standard, advanced
+    
+  # 分类器配置
+  classifier:
+    pooling_method: "cls"  # cls, mean, max
+    fusion_method: "concat"  # concat, add, multiply
+    hidden_dim: 512
+    dropout: 0.1
+
+# PEFT配置
+peft:
+  enabled: true
+  method: "lora"
+  
+  # LoRA特定参数
+  r: 16              # rank，越大表达能力越强但参数越多
+  alpha: 32          # scaling factor，通常设为2*r
+  dropout: 0.1       # dropout率
+  bias: "none"       # bias类型: none, all, lora_only
+  target_modules:    # 目标模块，null表示自动选择
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+
+# 训练配置
+training:
+  epochs: 10
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  
+  # 调度器
+  scheduler:
+    type: "cosine_with_warmup"
+    warmup_ratio: 0.1
+    
+  # 早停
+  early_stopping:
+    enabled: true
+    monitor: "val_loss"
+    patience: 5
+    mode: "min"
+
+# 验证配置
+validation:
+  check_val_every_n_epoch: 1
+  val_check_interval: null
+
+# 日志配置
+logging:
+  log_every_n_steps: 50
+  enable_tensorboard: true
+  enable_wandb: false
+
+# 硬件配置
+hardware:
+  accelerator: "gpu"
+  devices: 1
+  precision: "16-mixed"
+  
+# 检查点配置
+checkpoint:
+  save_top_k: 3
+  monitor: "val_loss"
+  mode: "min"
+  save_last: true

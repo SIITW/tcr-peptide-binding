@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-PyTorch Lightning训练模块
 
-将完整的TCR-肽结合预测模型包装为Lightning模块，
-提供标准化的训练、验证和测试流程。
-
-主要功能:
-1. 模型前向传播和损失计算
-2. 训练和验证步骤定义
-3. 优化器和学习率调度器配置
-4. 评估指标计算和记录
-"""
 
 import torch
 import pytorch_lightning as pl
@@ -45,17 +34,15 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
         """
         super().__init__()
 
-        # 保存超参数（用于检查点恢复）
+        # 保存超参数
         self.save_hyperparameters(config)
 
         self.config = config
         training_config = config.get("training", {})
 
-        # 训练参数 - 确保是数值类型
         lr_value = training_config.get("learning_rate", 2e-5)
         wd_value = training_config.get("weight_decay", 0.01)
 
-        # 强制类型转换，处理字符串或科学计数法
         try:
             self.learning_rate = float(lr_value)
         except (ValueError, TypeError) as e:
@@ -72,7 +59,6 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
 
         logger.info("Initializing Lightning module...")
 
-        # 创建完整的绑定预测模型
         self.model = create_binding_model(config)
 
         # 评估指标
@@ -81,7 +67,7 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
         logger.info("Lightning module initialization completed")
 
     def _setup_metrics(self) -> None:
-        """设置评估指标（中文注释）"""
+        """设置评估指标"""
 
         logger.info("Initializing evaluation metrics...")
 
@@ -125,7 +111,6 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
         2. 计算损失和准确率
         3. 记录训练指标
         """
-        # 前向传播
         outputs = self(batch)
         loss = outputs["loss"]
         logits = outputs["logits"]
@@ -142,16 +127,6 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
         self.log(
             "train_acc", self.train_acc, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True
         )
-
-        # 记录对比学习损失（如果有）
-        if "contrastive_loss" in outputs:
-            self.log(
-                "train_contrastive_loss",
-                outputs["contrastive_loss"],
-                on_step=True,
-                on_epoch=True,
-                sync_dist=True,
-            )
         if "main_loss" in outputs:
             self.log(
                 "train_main_loss", outputs["main_loss"], on_step=True, on_epoch=True, sync_dist=True
@@ -168,7 +143,6 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
         2. 计算多种评估指标
         3. 记录验证指标
         """
-        # 前向传播
         outputs = self(batch)
         loss = outputs["loss"]
         logits = outputs["logits"]
@@ -269,16 +243,14 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
         warmup_ratio = training_config.get("warmup_ratio", 0.1)
         min_lr_ratio = training_config.get("min_lr_ratio", 0.01)
 
-        # 估计总步数（这里使用trainer的estimated_stepping_batches，在实际训练时会被正确设置）
+        # 估计总步数
         if (
             hasattr(self.trainer, "estimated_stepping_batches")
             and self.trainer.estimated_stepping_batches
         ):
             total_steps = self.trainer.estimated_stepping_batches
         else:
-            # 如果没有trainer信息，使用默认估计
-            total_steps = 1000  # 这会在实际训练时被正确更新
-
+            total_steps = 1000 
         warmup_steps = int(total_steps * warmup_ratio)
 
         if scheduler_type == "cosine_with_warmup":
@@ -314,22 +286,20 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",  # 每步更新学习率
+                "interval": "step", 
                 "frequency": 1,
                 "name": "learning_rate",
             },
         }
 
     def on_train_epoch_end(self):
-        """训练epoch结束时的回调"""
         # 记录当前学习率
         current_lr = self.optimizers().param_groups[0]["lr"]
         self.log("learning_rate", current_lr, sync_dist=True)
 
     def on_validation_epoch_end(self):
-        """验证epoch结束时的回调"""
         # 打印主要指标
-        if self.trainer.current_epoch % 5 == 0:  # 每5个epoch打印一次
+        if self.trainer.current_epoch % 5 == 0: 
             logger.info(
                 f"Epoch {self.trainer.current_epoch}: "
                 f"val_loss={self.trainer.logged_metrics.get('val_loss', 0):.4f}, "
@@ -341,7 +311,7 @@ class TCRPeptideBindingLightningModule(pl.LightningModule):
         self, batch: Dict[str, torch.Tensor], batch_idx: int
     ) -> Dict[str, torch.Tensor]:
         """
-        预测步骤（用于推理）
+        预测步骤
 
         返回:
             预测结果，包含概率和预测类别

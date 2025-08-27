@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
-"""
-TCR-肽结合预测完整模型
-
-组合所有模型组件构建完整的预测流程：
-编码器 → Cross Attention → 分类器
-
-模型架构：
-1. TCR编码器 + 肽编码器：使用ESM++预训练模型进行序列编码
-2. Cross Attention融合：捕获TCR-肽之间的相互作用
-3. 结合分类器：预测是否结合
-
-支持标准版和增强版两种配置。
-"""
-
 import torch
 import torch.nn as nn
 from typing import Dict, Any
 import logging
 
 from .encoders import TCREncoder, PeptideEncoder
-from .attention import CrossAttentionFusion, EnhancedCrossAttentionFusion
-from .classifiers import BindingClassifier, EnhancedBindingClassifier
+from .attention import CrossAttentionFusion
+from .classifiers import BindingClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +17,8 @@ class TCRPeptideBindingModel(nn.Module):
 
     这是整个系统的核心模型，集成了：
     1. 序列编码（ESM++ + PEFT微调）
-    2. 跨序列注意力（Cross Attention）
+    2. 跨序列注意力（交叉注意力）
     3. 结合预测（分类器）
-
-    模型支持两种配置：
-    - 标准版：简单高效，适合大多数场景
-    - 增强版：功能丰富，适合高精度需求
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -69,50 +51,25 @@ class TCRPeptideBindingModel(nn.Module):
 
         logger.info(f"Creating fusion module: {fusion_type}")
 
-        if fusion_type == "enhanced":
-            # 增强版Cross Attention
-            self.fusion = EnhancedCrossAttentionFusion(
-                hidden_dim=hidden_dim,
-                num_heads=fusion_config.get("num_heads", 8),
-                fusion_strategy=fusion_config.get("strategy", "enhanced_bidirectional"),
-                dropout=fusion_config.get("dropout", 0.1),
-                use_multi_scale=fusion_config.get("use_multi_scale", True),
-                use_position_aware=fusion_config.get("use_position_aware", True),
-                use_contrastive=fusion_config.get("use_contrastive", True),
-                use_gated_fusion=fusion_config.get("use_gated_fusion", True),
-            )
-        else:
-            # 标准版Cross Attention
-            self.fusion = CrossAttentionFusion(
-                hidden_dim=hidden_dim,
-                num_heads=fusion_config.get("num_heads", 8),
-                dropout=fusion_config.get("dropout", 0.1),
-                fusion_strategy=fusion_config.get("strategy", "bidirectional"),
-            )
 
+        self.fusion = CrossAttentionFusion(
+            hidden_dim=hidden_dim,
+            num_heads=fusion_config.get("num_heads", 8),
+            dropout=fusion_config.get("dropout", 0.1),
+            fusion_strategy=fusion_config.get("strategy", "bidirectional")
+        )
         # 根据配置选择分类器类型
         classifier_config = config.get("classifier", {})
 
         logger.info("Creating classifier...")
 
-        if fusion_type == "enhanced":
-            # 增强版分类器
-            self.classifier = EnhancedBindingClassifier(
-                hidden_dim=hidden_dim,
-                num_classes=classifier_config.get("num_classes", 2),
-                pooling_strategy=classifier_config.get("pooling_strategy", "cls"),
-                fusion_method=classifier_config.get("fusion_method", "adaptive"),
-                dropout=classifier_config.get("dropout", 0.1),
-            )
-        else:
-            # 标准版分类器
-            self.classifier = BindingClassifier(
-                hidden_dim=hidden_dim,
-                num_classes=classifier_config.get("num_classes", 2),
-                pooling_strategy=classifier_config.get("pooling_strategy", "cls"),
-                fusion_method=classifier_config.get("fusion_method", "concat"),
-                dropout=classifier_config.get("dropout", 0.1),
-            )
+        self.classifier = BindingClassifier(
+            hidden_dim=hidden_dim,
+            num_classes=classifier_config.get("num_classes", 2),
+            pooling_strategy=classifier_config.get("pooling_strategy", "cls"),
+            fusion_method=classifier_config.get("fusion_method", "concat"),
+            dropout=classifier_config.get("dropout", 0.1),
+        )
 
         self.fusion_type = fusion_type
 
@@ -122,7 +79,7 @@ class TCRPeptideBindingModel(nn.Module):
         logger.info("TCR-peptide binding prediction model initialization completed")
 
     def _log_model_info(self):
-        """记录模型信息（中文注释）"""
+        """记录模型信息"""
         total_params = sum(p.numel() for p in self.parameters())
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
 
@@ -138,7 +95,7 @@ class TCRPeptideBindingModel(nn.Module):
 
         完整的预测流程：
         1. 序列编码：TCR和肽序列分别通过编码器
-        2. Cross Attention：两个序列进行交叉注意力融合
+        2. 交叉注意力：两个序列进行交叉注意力融合
         3. 分类预测：融合后的特征进行结合预测
 
         参数:
@@ -147,13 +104,13 @@ class TCRPeptideBindingModel(nn.Module):
                 - tcr_attention_mask: TCR注意力掩码
                 - peptide_input_ids: 肽序列的token IDs
                 - peptide_attention_mask: 肽注意力掩码
-                - labels: 真实标签（可选，用于损失计算）
+                - labels: 真实标签
 
         返回:
             输出字典，包含logits和可选的loss
         """
 
-        # Step 1: 序列编码
+        # 步骤1: 序列编码
         logger.debug("Starting sequence encoding...")
 
         # TCR序列编码
@@ -177,17 +134,19 @@ class TCRPeptideBindingModel(nn.Module):
         logger.debug(f"   TCR embedding shape: {tcr_embeddings.shape}")
         logger.debug(f"   Peptide embedding shape: {peptide_embeddings.shape}")
 
-        # Step 2: Cross Attention融合
+        # 步骤2: 跨序列注意力融合
         logger.debug("Starting Cross Attention fusion...")
+
+        tcr_mask = getattr(tcr_outputs, 'updated_attention_mask', batch["tcr_attention_mask"])
+        peptide_mask = getattr(peptide_outputs, 'updated_attention_mask', batch["peptide_attention_mask"])
 
         fusion_kwargs = {
             "tcr_embeddings": tcr_embeddings,
             "peptide_embeddings": peptide_embeddings,
-            "tcr_mask": batch["tcr_attention_mask"],
-            "peptide_mask": batch["peptide_attention_mask"],
+            "tcr_mask": tcr_mask,
+            "peptide_mask": peptide_mask,
         }
 
-        # 增强版融合需要标签进行对比学习
         if self.fusion_type == "enhanced" and "labels" in batch:
             fusion_kwargs["labels"] = batch["labels"]
 
@@ -195,59 +154,33 @@ class TCRPeptideBindingModel(nn.Module):
 
         logger.debug("   Fusion completed")
 
-        # Step 3: 分类预测
         logger.debug("Starting classification prediction...")
 
-        if self.fusion_type == "enhanced":
-            # 增强版分类器使用融合输出
-            logits = self.classifier(
-                fusion_outputs=fusion_outputs,
-                tcr_mask=batch["tcr_attention_mask"],
-                peptide_mask=batch["peptide_attention_mask"],
-            )
-        else:
-            # 标准版分类器使用独立的嵌入
-            tcr_final = fusion_outputs.get("tcr_fused", tcr_embeddings)
-            peptide_final = fusion_outputs.get("peptide_fused", peptide_embeddings)
+        tcr_final = fusion_outputs.get("tcr_fused", tcr_embeddings)
+        peptide_final = fusion_outputs.get("peptide_fused", peptide_embeddings)
 
-            logits = self.classifier(
-                tcr_embeddings=tcr_final,
-                peptide_embeddings=peptide_final,
-                tcr_mask=batch["tcr_attention_mask"],
-                peptide_mask=batch["peptide_attention_mask"],
-            )
+        logits = self.classifier(
+            tcr_embeddings=tcr_final,
+            peptide_embeddings=peptide_final,
+            tcr_mask=batch["tcr_attention_mask"],
+            peptide_mask=batch["peptide_attention_mask"],
+        )
 
         logger.debug(f"   Logits shape: {logits.shape}")
 
-        # 构建输出
         outputs = {"logits": logits}
 
-        # Step 4: 计算损失（如果提供了标签）
+        # 步骤4: 计算损失
         if "labels" in batch:
             logger.debug("Computing loss...")
-
-            # 主分类损失
             loss_fn = nn.CrossEntropyLoss()
             main_loss = loss_fn(logits, batch["labels"])
 
             total_loss = main_loss
-
-            # 添加对比学习损失（如果有）
-            if "contrastive_loss" in fusion_outputs:
-                contrastive_weight = 0.1  # 对比损失权重
-                contrastive_loss = fusion_outputs["contrastive_loss"]
-                total_loss = main_loss + contrastive_weight * contrastive_loss
-
-                outputs["contrastive_loss"] = contrastive_loss
-                outputs["main_loss"] = main_loss
-
-                logger.debug(f"   Main loss: {main_loss.item():.4f}")
-                logger.debug(f"   Contrastive loss: {contrastive_loss.item():.4f}")
-
             outputs["loss"] = total_loss
             logger.debug(f"   Total loss: {total_loss.item():.4f}")
 
-        # 添加注意力权重（用于可视化分析）
+        # 添加注意力权重
         for key in fusion_outputs:
             if "weights" in key:
                 outputs[key] = fusion_outputs[key]
@@ -256,7 +189,7 @@ class TCRPeptideBindingModel(nn.Module):
 
     def predict(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """
-        预测模式的前向传播（无梯度计算）
+        预测模式的前向传播
 
         参数:
             batch: 输入批次
@@ -276,7 +209,7 @@ class TCRPeptideBindingModel(nn.Module):
             return {
                 "predictions": preds,
                 "probabilities": probs,
-                "binding_probability": probs[:, 1],  # 结合概率（中文注释）
+                "binding_probability": probs[:, 1],  # 结合概率
                 "logits": logits,
             }
 
